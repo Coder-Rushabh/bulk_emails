@@ -1,6 +1,6 @@
 # AdvisorConnect Pro
 
-A full-stack outreach platform for discovering, enriching, and contacting SEBI-registered investment advisers (and arbitrary LinkedIn-sourced leads) with rate-limited, audit-logged SMTP delivery.
+A full-stack outreach platform for discovering, enriching, and contacting leads with rate-limited, audit-logged SMTP delivery.
 
 The system combines:
 

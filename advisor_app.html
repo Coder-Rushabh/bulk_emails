@@ -1,0 +1,760 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AdvisorConnect Pro</title>
+    <script src="lib/react.js"></script>
+    <script src="lib/react-dom.js"></script>
+    <script src="lib/babel.js"></script>
+    <script src="lib/papaparse.js"></script>
+    <script src="lib/xlsx.full.min.js"></script>
+    <style>
+        /* Simple icon replacements using text/emoji since local FontAwesome needs font files */
+        .fa-angle-right::before { content: ">"; }
+        .fa-check-circle::before { content: "✓"; }
+        .fa-clock::before { content: "🕒"; }
+        .fa-paper-plane::before { content: "✉"; }
+        .fa-spinner::before { content: "⏳"; }
+        .fa-spin { animation: spin 1s linear infinite; }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+    </style>
+    <style>
+        :root {
+            --primary: #0284c7;
+            --primary-glow: rgba(2, 132, 199, 0.1);
+            --secondary: #0ea5e9;
+            --bg-dark: #f8fafc;
+            --bg-card: #ffffff;
+            --text-main: #0f172a;
+            --text-muted: #64748b;
+            --accent: #f59e0b;
+            --success: #10b981;
+            --border: #e2e8f0;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            background-color: var(--bg-dark);
+            color: var(--text-main);
+            line-height: 1.5;
+            padding: 2rem;
+        }
+
+        .container { max-width: 1200px; margin: 0 auto; }
+        header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem; border-bottom: 2px solid var(--border); padding-bottom: 1rem; }
+        h1 { font-size: 2rem; color: var(--primary); font-weight: 800; letter-spacing: -0.025em; }
+        
+        .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
+        .stat-card { background: var(--bg-card); padding: 1.5rem; border-radius: 1rem; border: 1px solid var(--border); box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+        .stat-value { font-size: 1.5rem; font-weight: 700; display: block; color: var(--primary); }
+        .stat-label { color: var(--text-muted); font-size: 0.8rem; text-transform: uppercase; font-weight: 600; }
+
+        .nav { display: flex; gap: 1.5rem; margin-bottom: 1.5rem; }
+        .nav-btn { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 1rem; font-weight: 600; padding: 0.5rem 0; position: relative; }
+        .nav-btn.active { color: var(--primary); }
+        .nav-btn.active::after { content: ''; position: absolute; bottom: -2px; left: 0; width: 100%; height: 2px; background: var(--primary); }
+
+        .advisor-card { background: var(--bg-card); padding: 1.25rem; border-radius: 0.75rem; border: 1px solid var(--border); margin-bottom: 0.75rem; display: grid; grid-template-columns: 2fr 1.5fr 1fr 1fr; align-items: center; gap: 1rem; transition: all 0.2s; }
+        .advisor-card:hover { border-color: var(--primary); box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); }
+        .advisor-name { color: var(--text-main); font-weight: 700; display: block; }
+        .advisor-reg { font-size: 0.8rem; color: var(--text-muted); }
+        .advisor-email { font-family: monospace; font-size: 0.9rem; color: var(--primary); }
+        
+        .status-badge { display: flex; align-items: center; gap: 0.5rem; background: #f1f5f9; padding: 0.4rem 0.75rem; border-radius: 2rem; font-size: 0.85rem; border: 1px solid var(--border); }
+        .status-input { background: none; border: none; color: inherit; width: 80px; outline: none; font-weight: 500; }
+        .status-sent { color: var(--success); background: #f0fdf4; border-color: #bbf7d0; }
+        .status-pending { color: var(--accent); background: #fffbeb; border-color: #fef3c7; }
+
+        .btn { background: var(--primary); border: none; color: #fff; padding: 0.6rem 1.2rem; border-radius: 0.5rem; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 0.5rem; transition: all 0.2s; }
+        .btn:hover { background: var(--secondary); transform: translateY(-1px); box-shadow: 0 4px 12px var(--primary-glow); }
+        
+        textarea { width: 100%; background: #fff; border: 1px solid var(--border); color: var(--text-main); padding: 1rem; border-radius: 0.5rem; min-height: 200px; margin: 1rem 0; font-family: inherit; font-size: 1rem; }
+        textarea:focus { border-color: var(--primary); outline: none; box-shadow: 0 0 0 3px var(--primary-glow); }
+        .search-input { background: #fff; border: 1px solid var(--border); color: var(--text-main); padding: 0.6rem 1rem; border-radius: 0.5rem; width: 320px; }
+        .search-input:focus { border-color: var(--primary); outline: none; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+        const DAILY_LIMIT = 100;
+
+        function App() {
+            const [advisors, setAdvisors] = useState([]);
+            const [loading, setLoading] = useState(true);
+            const [view, setView] = useState('daily');
+            const [searchTerm, setSearchTerm] = useState('');
+            const [dataFileName, setDataFileName] = useState('sebi_advisers.csv');
+            const [availableColumns, setAvailableColumns] = useState([]);
+            const [fieldMapping, setFieldMapping] = useState(() => {
+                const saved = localStorage.getItem('field_mapping');
+                return saved ? JSON.parse(saved) : {
+                    name: 'Name',
+                    email: 'E-mail',
+                    regNo: 'Registration No.'
+                };
+            });
+            
+            const [statuses, setStatuses] = useState(() => JSON.parse(localStorage.getItem('advisor_statuses') || '{}'));
+            const [sendTimes, setSendTimes] = useState(() => JSON.parse(localStorage.getItem('advisor_send_times') || '{}'));
+            const [logs, setLogs] = useState(() => JSON.parse(localStorage.getItem('outreach_logs') || '[]'));
+            const [subject, setSubject] = useState(() => localStorage.getItem('email_subject') || "Inquiry regarding SEBI Registration");
+            const [template, setTemplate] = useState(() => localStorage.getItem('email_template') || "Hello {Name},\n\nI noticed you are a SEBI registered advisor (Reg No: {RegNo}). I would like to connect...\n\nBest regards,\n[Your Name]");
+            const [senderConfig, setSenderConfig] = useState(() => JSON.parse(localStorage.getItem('sender_config') || '{"email":"","password":"","smtp_server":"smtp.gmail.com","smtp_port":587}'));
+
+            useEffect(() => {
+                fetch('sebi_advisers.csv')
+                    .then(res => {
+                        if (res.ok) return res.text();
+                        throw new Error('Not found');
+                    })
+                    .then(csvData => {
+                        Papa.parse(csvData, {
+                            header: true,
+                            complete: (results) => {
+                                const data = results.data.filter(a => Object.values(a).some(v => v));
+                                if (data.length > 0) {
+                                    setAvailableColumns(Object.keys(data[0]));
+                                    setAdvisors(data);
+                                }
+                                setLoading(false);
+                            }
+                        });
+                    })
+                    .catch(err => {
+                        console.log("No default data found, please upload one in Settings.");
+                        setLoading(false);
+                    });
+            }, []);
+
+            useEffect(() => localStorage.setItem('advisor_statuses', JSON.stringify(statuses)), [statuses]);
+            useEffect(() => localStorage.setItem('advisor_send_times', JSON.stringify(sendTimes || {})), [sendTimes]);
+            useEffect(() => localStorage.setItem('outreach_logs', JSON.stringify(logs)), [logs]);
+            useEffect(() => localStorage.setItem('email_subject', subject), [subject]);
+            useEffect(() => localStorage.setItem('email_template', template), [template]);
+            useEffect(() => localStorage.setItem('sender_config', JSON.stringify(senderConfig)), [senderConfig]);
+            useEffect(() => localStorage.setItem('field_mapping', JSON.stringify(fieldMapping)), [fieldMapping]);
+
+            const handleFileUpload = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+
+                setDataFileName(file.name);
+                const reader = new FileReader();
+                
+                if (file.name.endsWith('.csv')) {
+                    reader.onload = (evt) => {
+                        const text = evt.target.result;
+                        Papa.parse(text, {
+                            header: false,
+                            skipEmptyLines: true,
+                            complete: (results) => {
+                                const rows = results.data;
+                                // Use the same "Max Columns" logic for CSV
+                                let maxCols = 0;
+                                let headerIndex = 0;
+                                const searchLimit = Math.min(rows.length, 10);
+                                
+                                for (let i = 0; i < searchLimit; i++) {
+                                    const colCount = rows[i].filter(cell => String(cell).trim() !== "").length;
+                                    if (colCount > maxCols) {
+                                        maxCols = colCount;
+                                        headerIndex = i;
+                                    }
+                                }
+                                
+                                const headers = rows[headerIndex].map(h => String(h).trim());
+                                const rawData = rows.slice(headerIndex + 1);
+                                
+                                const formattedData = rawData.map(row => {
+                                    const obj = {};
+                                    headers.forEach((h, i) => {
+                                        if (h) obj[h] = row[i];
+                                    });
+                                    return obj;
+                                }).filter(a => Object.values(a).some(v => String(v).trim() !== ""));
+
+                                if (formattedData.length > 0) {
+                                    setAvailableColumns(headers.filter(h => h));
+                                    setAdvisors(formattedData);
+                                }
+                            }
+                        });
+                    };
+                    reader.readAsText(file);
+                } else {
+                    reader.onload = (evt) => {
+                        try {
+                            if (typeof XLSX === 'undefined') {
+                                throw new Error("Excel library (SheetJS) failed to load. Please check your internet connection and refresh the page.");
+                            }
+                            const dataBuffer = new Uint8Array(evt.target.result);
+                            const workbook = XLSX.read(dataBuffer, { type: 'array' });
+                            const firstSheetName = workbook.SheetNames[0];
+                            const worksheet = workbook.Sheets[firstSheetName];
+                            
+                            // Get raw rows as arrays
+                            const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "" });
+                            
+                            // Better Header Detection: 
+                            // Find the row in the first 10 rows that has the MAXIMUM number of non-empty cells.
+                            // This usually identifies the main header row even if there are title rows or group headers above it.
+                            let maxCols = 0;
+                            let headerIndex = 0;
+                            const searchLimit = Math.min(rows.length, 10);
+                            
+                            for (let i = 0; i < searchLimit; i++) {
+                                const colCount = rows[i].filter(cell => String(cell).trim() !== "").length;
+                                if (colCount > maxCols) {
+                                    maxCols = colCount;
+                                    headerIndex = i;
+                                }
+                            }
+                            
+                            const headers = rows[headerIndex].map(h => String(h).trim());
+                            const rawData = rows.slice(headerIndex + 1);
+                            
+                            const formattedData = rawData.map(row => {
+                                const obj = {};
+                                headers.forEach((h, i) => {
+                                    if (h) obj[h] = row[i];
+                                });
+                                return obj;
+                            }).filter(a => Object.values(a).some(v => String(v).trim() !== ""));
+
+                            if (formattedData.length > 0) {
+                                const validHeaders = headers.filter(h => h && !h.startsWith('__EMPTY'));
+                                setAvailableColumns(validHeaders);
+                                setAdvisors(formattedData);
+                            }
+                        } catch (e) {
+                            alert(e.message);
+                        }
+                    };
+                    reader.readAsArrayBuffer(file);
+                }
+            };
+
+            const getFieldValue = (advisor, fieldType) => {
+                const colName = fieldMapping[fieldType];
+                let result = "";
+                
+                // 1. Try Mapped Column
+                if (colName && advisor[colName]) {
+                    result = String(advisor[colName]).trim();
+                }
+
+                // 2. If looking for email and not found/invalid, Deep Scan ALL columns
+                if (fieldType === 'email' && (!result || !result.includes('@'))) {
+                    for (const key in advisor) {
+                        const cellValue = String(advisor[key]);
+                        // Looking for anything with an @ and a dot
+                        const emailMatch = cellValue.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/i);
+                        if (emailMatch) return emailMatch[0].toLowerCase();
+                    }
+                }
+
+                return result;
+            };
+
+            // SCAN REPORT LOGIC
+            const scanReport = useMemo(() => {
+                if (!advisors.length) return null;
+                let withName = 0;
+                let withDirectEmail = 0;
+                let withSmartEmail = 0;
+
+                advisors.forEach(a => {
+                    const name = getFieldValue(a, 'name');
+                    const mappedEmail = fieldMapping.email ? String(a[fieldMapping.email] || "") : "";
+                    const finalEmail = getFieldValue(a, 'email');
+                    
+                    if (name) withName++;
+                    if (mappedEmail.includes('@')) withDirectEmail++;
+                    else if (finalEmail.includes('@')) withSmartEmail++;
+                });
+
+                return { total: advisors.length, withName, withDirectEmail, withSmartEmail };
+            }, [advisors, fieldMapping]);
+
+            // STRICT FILTERING: Only consider records that have Name AND Email
+            const validAdvisors = useMemo(() => {
+                return advisors.filter(a => {
+                    const name = getFieldValue(a, 'name');
+                    const email = getFieldValue(a, 'email');
+                    return name && email && email.includes('@');
+                });
+            }, [advisors, fieldMapping]);
+
+            const dailyBatch = useMemo(() => {
+                if (!validAdvisors.length) return [];
+                const today = new Date().toDateString();
+                const dateHash = today.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+                const startIndex = (dateHash * DAILY_LIMIT) % validAdvisors.length;
+                return validAdvisors.slice(startIndex, startIndex + DAILY_LIMIT);
+            }, [validAdvisors]);
+
+            const filtered = useMemo(() => {
+                return validAdvisors.filter(a => 
+                    getFieldValue(a, 'name')?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                    getFieldValue(a, 'email')?.toLowerCase().includes(searchTerm.toLowerCase())
+                ).slice(0, 100);
+            }, [validAdvisors, searchTerm, fieldMapping]);
+
+            const [sending, setSending] = useState({});
+
+            const handleSend = async (advisor) => {
+                const email = getFieldValue(advisor, 'email');
+                const name = getFieldValue(advisor, 'name');
+                const regNo = getFieldValue(advisor, 'regNo');
+
+                if (!senderConfig.email || !senderConfig.password) {
+                    alert("Please configure your sender email and password in Settings first.");
+                    setView('settings');
+                    return;
+                }
+
+                if (!email || !email.includes('@')) {
+                    alert("Invalid or missing email address for " + name);
+                    return;
+                }
+
+                const body = template.replace(/{Name}/g, name).replace(/{RegNo}/g, regNo);
+                
+                setSending(prev => ({ ...prev, [email]: true }));
+                
+                try {
+                    const response = await fetch('http://localhost:5000/send-email', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            to: email,
+                            subject: subject,
+                            body: body,
+                            sender_email: senderConfig.email,
+                            sender_password: senderConfig.password,
+                            smtp_server: senderConfig.smtp_server,
+                            smtp_port: senderConfig.smtp_port
+                        })
+                    });
+
+                    const result = await response.json();
+
+                    if (response.ok) {
+                        const now = new Date().toLocaleString();
+                        const newLog = {
+                            name: name,
+                            email: email,
+                            subject: subject,
+                            timestamp: now,
+                            source: dataFileName,
+                            id: Date.now()
+                        };
+                        setLogs(prev => [newLog, ...prev]);
+                        setStatuses(prev => ({ ...prev, [email]: 'Sent' }));
+                        setSendTimes(prev => ({ ...prev, [email]: now }));
+                    } else {
+                        alert('Error: ' + result.error);
+                    }
+                } catch (error) {
+                    console.error('Fetch error:', error);
+                    alert('Could not connect to email server. Make sure email_server.py is running.');
+                } finally {
+                    setSending(prev => ({ ...prev, [email]: false }));
+                }
+            };
+
+            if (loading) return <div style={{padding: '2rem'}}>Loading Advisor Data...</div>;
+
+            const stats = {
+                total: validAdvisors.length,
+                valid: validAdvisors.length,
+                sentToday: dailyBatch.filter(a => statuses[getFieldValue(a, 'email')] === 'Sent').length,
+                remaining: dailyBatch.filter(a => statuses[getFieldValue(a, 'email')] !== 'Sent').length
+            };
+
+            return (
+                <div className="container">
+                    <header>
+                        <div>
+                            <h1>AdvisorConnect</h1>
+                            <p style={{color: 'var(--text-muted)'}}>Manage your outreach efficiently</p>
+                        </div>
+                        <div className="nav">
+                            <button className={`nav-btn ${view === 'daily' ? 'active' : ''}`} onClick={() => setView('daily')}>Daily Batch</button>
+                            <button className={`nav-btn ${view === 'all' ? 'active' : ''}`} onClick={() => setView('all')}>Database</button>
+                            <button className={`nav-btn ${view === 'template' ? 'active' : ''}`} onClick={() => setView('template')}>Template</button>
+                            <button className={`nav-btn ${view === 'logs' ? 'active' : ''}`} onClick={() => setView('logs')}>Logs</button>
+                            <button className={`nav-btn ${view === 'settings' ? 'active' : ''}`} onClick={() => setView('settings')}>⚙️ Settings</button>
+                        </div>
+                    </header>
+
+                    <div className="stats">
+                        <div className="stat-card">
+                            <span className="stat-label">Total Records Found</span>
+                            <span className="stat-value">{stats.total}</span>
+                        </div>
+                        <div className="stat-card">
+                            <span className="stat-label">Sent Today</span>
+                            <span className="stat-value" style={{color: 'var(--success)'}}>{stats.sentToday} / {DAILY_LIMIT}</span>
+                        </div>
+                        <div className="stat-card">
+                            <span className="stat-label">Data Source</span>
+                            <span className="stat-value" style={{color: 'var(--primary)', fontSize: '1rem'}} title={dataFileName}>{dataFileName.length > 20 ? dataFileName.substring(0, 17) + '...' : dataFileName}</span>
+                        </div>
+                    </div>
+
+                    {view === 'settings' && (
+                        <div style={{background: 'var(--bg-card)', padding: '2rem', borderRadius: '1rem', border: '1px solid var(--border)', animation: 'fadeIn 0.3s ease'}}>
+                            <h2 style={{marginBottom: '1.5rem'}}>Configuration Settings</h2>
+                            
+                             <div style={{marginBottom: '2rem', paddingBottom: '1.5rem', borderBottom: '1px solid var(--border)'}}>
+                                <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem'}}>
+                                    <h3 style={{fontSize: '1.1rem'}}>📁 User Data Source</h3>
+                                    {scanReport && (
+                                        <div style={{fontSize: '0.75rem', padding: '0.4rem 0.8rem', background: '#ecfdf5', color: '#065f46', borderRadius: '0.5rem', border: '1px solid #a7f3d0'}}>
+                                            <i className="fas fa-search" style={{marginRight: '0.5rem'}}></i>
+                                            {scanReport.total} rows • {scanReport.withName} names • {scanReport.withDirectEmail + scanReport.withSmartEmail} emails
+                                        </div>
+                                    )}
+                                </div>
+                                <p style={{color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '1rem'}}>Upload an Excel (.xlsx) or CSV file containing advisor data.</p>
+                                <input type="file" accept=".xlsx, .xls, .csv" onChange={handleFileUpload} style={{width: '100%', padding: '0.5rem', border: '1px solid var(--border)', borderRadius: '0.5rem'}} />
+                                
+                                {availableColumns.length > 0 && (
+                                    <div style={{marginTop: '1.5rem', padding: '1rem', background: '#f8fafc', borderRadius: '0.5rem'}}>
+                                        <h4 style={{fontSize: '0.9rem', marginBottom: '1rem'}}>Column Mapping</h4>
+                                        <p style={{fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '1rem'}}>Match the fields to the columns in your file:</p>
+                                        <div style={{display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '1rem'}}>
+                                            <div>
+                                                <label style={{display: 'block', fontSize: '0.75rem', fontWeight: '700', marginBottom: '0.4rem'}}>Name Field</label>
+                                                <select 
+                                                    style={{width: '100%', padding: '0.4rem', borderRadius: '0.4rem', border: '1px solid var(--border)'}}
+                                                    value={fieldMapping.name}
+                                                    onChange={e => setFieldMapping({...fieldMapping, name: e.target.value})}
+                                                >
+                                                    {availableColumns.map(col => <option key={col} value={col}>{col}</option>)}
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label style={{display: 'block', fontSize: '0.75rem', fontWeight: '700', marginBottom: '0.4rem'}}>Email Field</label>
+                                                <select 
+                                                    style={{width: '100%', padding: '0.4rem', borderRadius: '0.4rem', border: '1px solid var(--border)'}}
+                                                    value={fieldMapping.email}
+                                                    onChange={e => setFieldMapping({...fieldMapping, email: e.target.value})}
+                                                >
+                                                    {availableColumns.map(col => <option key={col} value={col}>{col}</option>)}
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label style={{display: 'block', fontSize: '0.75rem', fontWeight: '700', marginBottom: '0.4rem'}}>Reg No. Field</label>
+                                                <select 
+                                                    style={{width: '100%', padding: '0.4rem', borderRadius: '0.4rem', border: '1px solid var(--border)'}}
+                                                    value={fieldMapping.regNo}
+                                                    onChange={e => setFieldMapping({...fieldMapping, regNo: e.target.value})}
+                                                >
+                                                    <option value="">-- None --</option>
+                                                    {availableColumns.map(col => <option key={col} value={col}>{col}</option>)}
+                                                </select>
+                                            </div>
+                                        </div>
+
+                                        <div style={{marginTop: '1.5rem', borderTop: '1px solid var(--border)', paddingTop: '1rem'}}>
+                                            <h5 style={{fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '0.5rem'}}>Data Preview (Top Rows)</h5>
+                                            <div style={{fontSize: '0.8rem', overflowX: 'auto', marginBottom: '1.5rem'}}>
+                                                <table style={{width: '100%', borderCollapse: 'collapse'}}>
+                                                    <thead>
+                                                        <tr style={{textAlign: 'left', borderBottom: '1px solid var(--border)'}}>
+                                                            <th style={{padding: '0.25rem'}}>Name</th>
+                                                            <th style={{padding: '0.25rem'}}>Email</th>
+                                                            <th style={{padding: '0.25rem'}}>Reg No.</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        {advisors.slice(0, 3).map((a, i) => {
+                                                            const email = getFieldValue(a, 'email');
+                                                            const mappedCol = fieldMapping.email;
+                                                            const isSmartExtracted = email && (!a[mappedCol] || !String(a[mappedCol]).includes('@'));
+                                                            return (
+                                                                <tr key={i} style={{borderBottom: '1px solid #eee'}}>
+                                                                    <td style={{padding: '0.25rem'}}>{getFieldValue(a, 'name') || '(empty)'}</td>
+                                                                    <td style={{padding: '0.25rem'}}>
+                                                                        {email || '(empty)'}
+                                                                        {isSmartExtracted && <span style={{marginLeft: '0.5rem', fontSize: '0.6rem', color: 'var(--success)', background: '#ecfdf5', padding: '1px 4px', borderRadius: '4px'}}>✨ Smart Found</span>}
+                                                                    </td>
+                                                                    <td style={{padding: '0.25rem'}}>{getFieldValue(a, 'regNo') || '(empty)'}</td>
+                                                                </tr>
+                                                            );
+                                                        })}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+
+                                            {validAdvisors.length > 0 && (
+                                                <>
+                                                    <h5 style={{fontSize: '0.7rem', color: 'var(--success)', textTransform: 'uppercase', marginBottom: '0.5rem'}}>Successfully Detected (Ready for Outreach)</h5>
+                                                    <div style={{fontSize: '0.8rem', overflowX: 'auto'}}>
+                                                        <table style={{width: '100%', borderCollapse: 'collapse'}}>
+                                                            <tbody>
+                                                                {validAdvisors.slice(0, 3).map((a, i) => {
+                                                                    const email = getFieldValue(a, 'email');
+                                                                    const mappedCol = fieldMapping.email;
+                                                                    const isSmartExtracted = email && (!a[mappedCol] || !String(a[mappedCol]).includes('@'));
+                                                                    return (
+                                                                        <tr key={i} style={{borderBottom: '1px solid #eee'}}>
+                                                                            <td style={{padding: '0.25rem', width: '40%'}}>{getFieldValue(a, 'name')}</td>
+                                                                            <td style={{padding: '0.25rem'}}>
+                                                                                {email}
+                                                                                {isSmartExtracted && <span style={{marginLeft: '0.5rem', fontSize: '0.6rem', color: 'var(--success)', background: '#ecfdf5', padding: '1px 4px', borderRadius: '4px'}}>✨ Smart Found</span>}
+                                                                            </td>
+                                                                        </tr>
+                                                                    );
+                                                                })}
+                                                            </tbody>
+                                                        </table>
+                                                    </div>
+                                                </>
+                                            )}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+
+                            <div style={{marginBottom: '1rem'}}>
+                                <h3 style={{fontSize: '1.1rem', marginBottom: '1rem'}}>✉️ Email Account (Sender)</h3>
+                                <p style={{color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '1rem'}}>Configure the email account used to send outreach messages.</p>
+                                
+                                <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1rem'}}>
+                                    <div>
+                                        <label style={{display: 'block', fontSize: '0.8rem', fontWeight: '600', color: 'var(--text-muted)', marginBottom: '0.4rem'}}>Email Address</label>
+                                        <input 
+                                            className="search-input" 
+                                            style={{width: '100%'}}
+                                            value={senderConfig.email} 
+                                            onChange={e => setSenderConfig({...senderConfig, email: e.target.value})}
+                                            placeholder="e.g. name@gmail.com"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label style={{display: 'block', fontSize: '0.8rem', fontWeight: '600', color: 'var(--text-muted)', marginBottom: '0.4rem'}}>App Password</label>
+                                        <input 
+                                            type="password"
+                                            className="search-input" 
+                                            style={{width: '100%'}}
+                                            value={senderConfig.password} 
+                                            onChange={e => setSenderConfig({...senderConfig, password: e.target.value})}
+                                            placeholder="Enter password..."
+                                        />
+                                    </div>
+                                </div>
+                                
+                                <div style={{display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '1rem'}}>
+                                    <div>
+                                        <label style={{display: 'block', fontSize: '0.8rem', fontWeight: '600', color: 'var(--text-muted)', marginBottom: '0.4rem'}}>SMTP Server</label>
+                                        <input 
+                                            className="search-input" 
+                                            style={{width: '100%'}}
+                                            value={senderConfig.smtp_server} 
+                                            onChange={e => setSenderConfig({...senderConfig, smtp_server: e.target.value})}
+                                        />
+                                    </div>
+                                    <div>
+                                        <label style={{display: 'block', fontSize: '0.8rem', fontWeight: '600', color: 'var(--text-muted)', marginBottom: '0.4rem'}}>Port</label>
+                                        <input 
+                                            type="number"
+                                            className="search-input" 
+                                            style={{width: '100%'}}
+                                            value={senderConfig.smtp_port} 
+                                            onChange={e => setSenderConfig({...senderConfig, smtp_port: parseInt(e.target.value)})}
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+                            
+                             <div style={{marginTop: '3rem', paddingTop: '2rem', borderTop: '2px solid #fee2e2'}}>
+                                <h3 style={{fontSize: '1.1rem', color: '#dc2626', marginBottom: '1rem'}}>⚠️ Danger Zone</h3>
+                                <div style={{background: '#fef2f2', padding: '1.5rem', borderRadius: '1rem', border: '1px solid #fee2e2'}}>
+                                    <p style={{fontSize: '0.9rem', color: '#991b1b', marginBottom: '1.5rem'}}>
+                                        Resetting will clear all "Sent" statuses and reset your daily counter to zero. This action cannot be undone.
+                                    </p>
+                                    <button 
+                                        className="btn" 
+                                        style={{background: '#dc2626', color: '#fff'}}
+                                        onClick={() => {
+                                            if (confirm("Are you sure you want to RESET all outreach progress? This will clear all 'Sent' statuses.")) {
+                                                setStatuses({});
+                                                setSendTimes({});
+                                                alert("All progress has been reset.");
+                                            }
+                                        }}
+                                    >
+                                        Reset All Outreach Progress
+                                    </button>
+                                </div>
+                            </div>
+                            
+                            <button className="btn" style={{marginTop: '2rem'}} onClick={() => setView('daily')}>Save & Return</button>
+                        </div>
+                    )}
+
+                    {view === 'template' && (
+                        <div style={{background: 'var(--bg-card)', padding: '2rem', borderRadius: '1rem', border: '1px solid var(--border)'}}>
+                            <h2>Edit Outreach Template</h2>
+                            <div style={{marginTop: '1.5rem'}}>
+                                <label style={{display: 'block', fontSize: '0.9rem', fontWeight: '600', color: 'var(--text-muted)', marginBottom: '0.5rem'}}>Email Subject</label>
+                                <input 
+                                    className="search-input" 
+                                    style={{width: '100%', marginBottom: '1.5rem'}}
+                                    value={subject} 
+                                    onChange={e => setSubject(e.target.value)}
+                                    placeholder="Enter subject line..."
+                                />
+                                
+                                <label style={{display: 'block', fontSize: '0.9rem', fontWeight: '600', color: 'var(--text-muted)', marginBottom: '0.5rem'}}>Email Body</label>
+                                <textarea 
+                                    style={{marginTop: '0'}}
+                                    value={template} 
+                                    onChange={e => setTemplate(e.target.value)} 
+                                />
+                                <p style={{fontSize: '0.8rem', color: 'var(--text-muted)'}}>Placeholders: {"{Name}"}, {"{RegNo}"}</p>
+                            </div>
+                        </div>
+                    )}
+
+                    {view === 'logs' && (
+                        <div style={{background: 'var(--bg-card)', borderRadius: '1rem', border: '1px solid var(--border)', overflow: 'hidden'}}>
+                            <div style={{padding: '1.5rem', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+                                <h2>Outreach History</h2>
+                                <button className="btn" style={{background: '#ef4444', color: '#fff'}} onClick={() => setLogs([])}>Clear Logs</button>
+                            </div>
+                            <table style={{width: '100%', borderCollapse: 'collapse', textAlign: 'left'}}>
+                                <thead>
+                                    <tr style={{background: '#f8fafc', color: 'var(--text-muted)', fontSize: '0.85rem', textTransform: 'uppercase'}}>
+                                        <th style={{padding: '1rem'}}>Advisor</th>
+                                        <th style={{padding: '1rem'}}>Email</th>
+                                        <th style={{padding: '1rem'}}>Source File</th>
+                                        <th style={{padding: '1rem'}}>Timestamp</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {logs.length === 0 ? (
+                                        <tr><td colSpan="4" style={{padding: '3rem', textAlign: 'center', color: 'var(--text-muted)'}}>No activity recorded yet.</td></tr>
+                                    ) : logs.map(log => (
+                                        <tr key={log.id} style={{borderBottom: '1px solid var(--border)'}}>
+                                            <td style={{padding: '1rem', fontWeight: '600'}}>{log.name}</td>
+                                            <td style={{padding: '1rem', fontFamily: 'monospace'}}>{log.email}</td>
+                                            <td style={{padding: '1rem', fontSize: '0.85rem', color: 'var(--primary)'}}>{log.source}</td>
+                                            <td style={{padding: '1rem', color: 'var(--text-muted)', fontSize: '0.85rem'}}>{log.timestamp}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
+
+                    {(view === 'daily' || view === 'all') && (
+                        <div>
+                            <div style={{display: 'flex', justifyContent: 'space-between', marginBottom: '1.5rem', alignItems: 'center'}}>
+                                <div>
+                                    <h2 style={{display: 'inline-block', marginRight: '1rem'}}>
+                                        {view === 'daily' ? "Today's Outreach" : "All Advisors"}
+                                    </h2>
+                                    {view === 'daily' && stats.remaining > 0 && (
+                                        <button 
+                                            className="btn" 
+                                            style={{display: 'inline-flex', background: 'var(--success)', color: '#fff'}}
+                                            onClick={async () => {
+                                                const toSend = dailyBatch.filter(a => statuses[getFieldValue(a, 'email')] !== 'Sent');
+                                                if (!confirm(`This will send ${toSend.length} emails with a 2-second delay between each. Continue?`)) return;
+                                                
+                                                for (const advisor of toSend) {
+                                                    await handleSend(advisor);
+                                                    await new Promise(r => setTimeout(r, 2000)); // 2 second delay
+                                                }
+                                            }}
+                                        >
+                                            <i className="fas fa-paper-plane"></i> Send All {stats.remaining} Pending
+                                        </button>
+                                    )}
+                                </div>
+                                {view === 'all' && <input className="search-input" placeholder="Search database..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />}
+                            </div>
+                            {validAdvisors.length === 0 ? (
+                                <div style={{textAlign: 'center', padding: '5rem', background: 'var(--bg-card)', borderRadius: '1rem', border: '1px solid var(--border)'}}>
+                                    <p style={{color: 'var(--text-muted)', fontSize: '1.2rem'}}>
+                                        {advisors.length > 0 ? "No records with valid emails found." : "No data loaded."}
+                                    </p>
+                                    <p style={{color: 'var(--text-muted)', fontSize: '0.9rem', marginTop: '0.5rem'}}>
+                                        {advisors.length > 0 ? "Your file has 1912 records, but none of them have a valid email address mapped." : "Make sure you have selected the correct columns in Settings."}
+                                    </p>
+                                    <button className="btn" style={{margin: '1.5rem auto'}} onClick={() => setView(advisors.length > 0 ? 'all' : 'settings')}>
+                                        {advisors.length > 0 ? "View All Records in Database" : "Go to Settings"}
+                                    </button>
+                                </div>
+                            ) : (view === 'daily' ? dailyBatch : filtered).map((a, i) => {
+                                const email = getFieldValue(a, 'email');
+                                const name = getFieldValue(a, 'name');
+                                const regNo = getFieldValue(a, 'regNo');
+                                const status = statuses[email] || 'Pending';
+                                
+                                return (
+                                    <div key={i} className="advisor-card">
+                                        <div>
+                                            <span className="advisor-name">{name}</span>
+                                            {regNo && <span className="advisor-reg">{regNo}</span>}
+                                        </div>
+                                        <div className="advisor-email">
+                                            {email || <span style={{color: 'var(--accent)', fontSize: '0.8rem'}}>⚠️ No Email Found</span>}
+                                        </div>
+                                        <div style={{textAlign: 'center'}}>
+                                            {!email ? (
+                                                <div className="status-badge" style={{background: '#fef3c7', color: '#92400e'}}>
+                                                    Missing Email
+                                                </div>
+                                            ) : (
+                                                <>
+                                                    <div className={`status-badge ${status === 'Sent' ? 'status-sent' : 'status-pending'}`}>
+                                                        <i className={`fas ${status === 'Sent' ? 'fa-check-circle' : 'fa-clock'}`}></i>
+                                                        <input 
+                                                            className="status-input" 
+                                                            value={status} 
+                                                            onChange={e => setStatuses(prev => ({ ...prev, [email]: e.target.value }))}
+                                                        />
+                                                    </div>
+                                                    {status === 'Sent' && sendTimes[email] && (
+                                                        <div style={{fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '0.25rem'}}>
+                                                            {sendTimes[email]}
+                                                        </div>
+                                                    )}
+                                                </>
+                                            )}
+                                        </div>
+                                        <div style={{textAlign: 'right'}}>
+                                            <button 
+                                                className="btn" 
+                                                onClick={() => handleSend(a)}
+                                                disabled={sending[email] || !email}
+                                                style={{opacity: !email ? 0.5 : 1}}
+                                            >
+                                                <i className={`fas ${sending[email] ? 'fa-spinner fa-spin' : 'fa-paper-plane'}`}></i>
+                                                {sending[email] ? 'Sending...' : 'Send'}
+                                            </button>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
